@@ -86,7 +86,7 @@ with tab_foto:
                     "Retorne em formato legível no estilo: Alimento | Peso Estimado | Calorias."
                 )
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-2.0-flash',
                     contents=[image, prompt]
                 )
                 st.subheader("Resultado da Análise:")
