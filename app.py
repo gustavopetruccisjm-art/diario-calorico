@@ -7,6 +7,9 @@ from PIL import Image
 # Configuração da página
 st.set_page_config(page_title="Meu Diário Calórico & Fitness", page_icon="⚡", layout="centered")
 
+# Busca a chave de API dos Secrets do Streamlit ou do campo da Sidebar
+api_key = st.secrets.get("GEMINI_API_KEY", None)
+
 # Inicialização de Variáveis de Sessão
 if "historico_comida" not in st.session_state:
     st.session_state.historico_comida = []
@@ -15,7 +18,10 @@ if "historico_treino" not in st.session_state:
 
 # --- SIDEBAR: PERFIL & METAS ---
 st.sidebar.header("📊 Perfil & Parâmetros")
-api_key = st.sidebar.text_input("Chave da API Google Gemini", type="password")
+
+# Se não houver chave nos Secrets, exibe o campo para digitação manual
+if not api_key:
+    api_key = st.sidebar.text_input("Chave da API Google Gemini", type="password")
 
 sexo = st.sidebar.selectbox("Sexo", ["Masculino", "Feminino"])
 idade = st.sidebar.number_input("Idade", value=30, step=1)
@@ -37,7 +43,6 @@ meta_base = st.sidebar.number_input("Meta Calórica Base (kcal)", value=int(tmb 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🏃‍♂️ Atividades do Dia")
 passos = st.sidebar.number_input("Número de Passos", value=0, step=500)
-# Estimativa média: ~0.04 kcal por passo ajustado pelo peso
 calorias_passos = int(passos * 0.04 * (peso / 70.0))
 st.sidebar.caption(f"Gasto estimado dos passos: ~{calorias_passos} kcal")
 
@@ -46,7 +51,6 @@ consumido = sum(item["calorias"] for item in st.session_state.historico_comida)
 gasto_treinos = sum(item["calorias"] for item in st.session_state.historico_treino)
 gasto_exercicio_total = gasto_treinos + calorias_passos
 
-# Meta Dinâmica = Meta Base + Calorias Queimadas em Exercícios
 meta_ajustada = meta_base + gasto_exercicio_total
 saldo_restante = meta_ajustada - consumido
 
@@ -77,20 +81,20 @@ with tab_foto:
             try:
                 client = genai.Client(api_key=api_key)
                 prompt = (
-                    "Analise esta imagem de comida. Liste os alimentos identificados com suas "
-                    "estimativas de peso em gramas e calorias totais. Retorne no formato: "
-                    "Alimento | Peso Estimado | Calorias."
+                    "Analise esta imagem de refeição/comida. Liste os alimentos identificados "
+                    "com suas estimativas de peso em gramas e calorias totais. "
+                    "Retorne em formato legível no estilo: Alimento | Peso Estimado | Calorias."
                 )
                 response = client.models.generate_content(
-                    model='gemini-1.0-flash',
+                    model='gemini-2.5-flash',
                     contents=[image, prompt]
                 )
                 st.subheader("Resultado da Análise:")
-                st.text(response.text)
+                st.markdown(response.text)
             except Exception as e:
-                st.error(f"Erro ao analisar: {e}")
+                st.error(f"Erro ao processar imagem: {e}")
     elif foto and not api_key:
-        st.warning("Insira sua chave da API na barra lateral para habilitar a análise por IA.")
+        st.warning("A chave da API Gemini não foi configurada nos Secrets nem informada manualmente.")
 
 with tab_manual:
     with st.form("form_comida"):
