@@ -84,7 +84,6 @@ with tab_foto:
 response = client.models.generate_content(
     model='gemini-2.0-flash',
     contents=[image, prompt]
-)
                 )
                 st.subheader("Resultado da Análise:")
                 st.text(response.text)
