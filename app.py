@@ -14,6 +14,23 @@ st.set_page_config(page_title="Diário Calórico Pro", page_icon="⚡", layout="
 api_key = st.secrets.get("GEMINI_API_KEY", None)
 url_sheets = st.secrets.get("URL_SHEETS", None)
 
+# --- FUNÇÃO PARA BUSCAR DADOS DA PLANILHA ---
+def buscar_dados_planilha():
+    if not url_sheets:
+        return []
+    try:
+        res = requests.get(url_sheets)
+        if res.status_code == 200:
+            dados = res.json()
+            # Limpa o formato de data ISO (ex: "2026-08-01T03:00:00.000Z" -> "2026-08-01")
+            for item in dados:
+                if "Data" in item and item["Data"]:
+                    item["Data"] = str(item["Data"]).split("T")[0]
+            return dados
+    except Exception:
+        pass
+    return []
+
 # Inicialização de Variáveis de Sessão
 if "historico_comida" not in st.session_state:
     st.session_state.historico_comida = []
@@ -23,6 +40,23 @@ if "temp_comida" not in st.session_state:
     st.session_state.temp_comida = None
 if "temp_treino" not in st.session_state:
     st.session_state.temp_treino = None
+
+# Busca os dados da planilha
+dados_planilha = buscar_dados_planilha()
+hoje_str = str(date.today())
+
+# --- CÁLCULO DE CALORIAS SALVAS HOJE NA PLANILHA ---
+kcal_comida_planilha_hoje = sum(
+    int(item.get("Calorias_Kcal", 0)) 
+    for item in dados_planilha 
+    if item.get("Data") == hoje_str and item.get("Tipo") in ["Alimentação", "Alimentacao"]
+)
+
+kcal_treino_planilha_hoje = sum(
+    int(item.get("Calorias_Kcal", 0)) 
+    for item in dados_planilha 
+    if item.get("Data") == hoje_str and item.get("Tipo") == "Treino"
+)
 
 # --- SIDEBAR: PERFIL & METAS ---
 st.sidebar.header("📊 Perfil & Parâmetros")
@@ -53,13 +87,15 @@ passos = st.sidebar.number_input("Número de Passos", value=0, step=500)
 calorias_passos = int(passos * 0.04 * (peso / 70.0))
 st.sidebar.caption(f"Gasto dos passos: ~{calorias_passos} kcal")
 
-# CÁLCULOS TOTAIS DO DIA ATUAL
-consumido = sum(item["calorias"] for item in st.session_state.historico_comida)
-gasto_treinos = sum(item["calorias"] for item in st.session_state.historico_treino)
-gasto_exercicio_total = gasto_treinos + calorias_passos
+# CÁLCULOS TOTAIS DO DIA (Planilha + Sessão Atual)
+consumido_sessao = sum(item["calorias"] for item in st.session_state.historico_comida)
+gasto_treinos_sessao = sum(item["calorias"] for item in st.session_state.historico_treino)
+
+consumido_total = kcal_comida_planilha_hoje + consumido_sessao
+gasto_exercicio_total = kcal_treino_planilha_hoje + gasto_treinos_sessao + calorias_passos
 
 meta_ajustada = meta_base + gasto_exercicio_total
-saldo_restante = meta_ajustada - consumido
+saldo_restante = meta_ajustada - consumido_total
 
 # CORPO PRINCIPAL
 st.title("⚡ Diário Calórico & Fitness")
@@ -68,10 +104,10 @@ st.title("⚡ Diário Calórico & Fitness")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Meta Base", f"{meta_base} kcal")
 col2.metric("Gasto Atividades", f"+{gasto_exercicio_total} kcal")
-col3.metric("Consumido Hoje", f"{consumido} kcal")
+col3.metric("Consumido Hoje", f"{consumido_total} kcal")
 col4.metric("Falta Consumir", f"{saldo_restante} kcal", delta_color="inverse")
 
-st.progress(min(max(consumido / meta_ajustada if meta_ajustada > 0 else 0.0, 0.0), 1.0))
+st.progress(min(max(consumido_total / meta_ajustada if meta_ajustada > 0 else 0.0, 0.0), 1.0))
 st.markdown("---")
 
 # ABAS DE NAVEGAÇÃO
@@ -118,14 +154,14 @@ with tab_foto:
             nome_editado = st.text_input("Descrição da Comida", value=st.session_state.temp_comida.get("alimento", ""))
             calorias_editadas = st.number_input("Calorias Estimadas (kcal)", value=int(st.session_state.temp_comida.get("calorias", 0)), step=10)
             
-            if st.form_submit_button("✅ Confirmar e Salvar no Diário"):
+            if st.form_submit_button("✅ Confirmar e Adicionar"):
                 st.session_state.historico_comida.append({
-                    "data": str(date.today()),
+                    "data": hoje_str,
                     "alimento": nome_editado,
                     "calorias": calorias_editadas
                 })
                 st.session_state.temp_comida = None
-                st.success("Refeição salva com sucesso!")
+                st.success("Refeição adicionada à fila do dia!")
                 st.rerun()
 
 # ---------------------------------------------------------
@@ -197,14 +233,14 @@ with tab_atividade:
             treino_editado = st.text_input("Atividade", value=st.session_state.temp_treino.get("atividade", ""))
             kcal_editada = st.number_input("Calorias Queimadas (kcal)", value=int(st.session_state.temp_treino.get("calorias", 0)), step=10)
             
-            if st.form_submit_button("✅ Confirmar e Salvar Treino"):
+            if st.form_submit_button("✅ Confirmar e Adicionar"):
                 st.session_state.historico_treino.append({
-                    "data": str(date.today()),
+                    "data": hoje_str,
                     "atividade": treino_editado,
                     "calorias": kcal_editada
                 })
                 st.session_state.temp_treino = None
-                st.success("Treino salvo!")
+                st.success("Treino adicionado à fila do dia!")
                 st.rerun()
 
 # ---------------------------------------------------------
@@ -213,68 +249,54 @@ with tab_atividade:
 with tab_consulta:
     st.subheader("📈 Consulta de Registros na Planilha")
     
-    if not url_sheets:
-        st.error("Configure a variável 'URL_SHEETS' nos Secrets.")
+    if st.button("🔄 Atualizar Dados da Planilha"):
+        st.rerun()
+        
+    if dados_planilha:
+        df_planilha = pd.DataFrame(dados_planilha)
+        st.markdown("### 📋 Todos os Registros Salvos")
+        st.dataframe(df_planilha, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### 📊 Evolução por Data (kcal)")
+        df_resumo = df_planilha.groupby(["Data", "Tipo"])["Calorias_Kcal"].sum().unstack().fillna(0)
+        st.bar_chart(df_resumo)
     else:
-        if st.button("🔄 Buscar Dados Atualizados da Planilha"):
-            try:
-                res = requests.get(url_sheets)
-                if res.status_code == 200:
-                    dados_planilha = res.json()
-                    if dados_planilha:
-                        df_planilha = pd.DataFrame(dados_planilha)
-                        
-                        # Filtro de Data
-                        st.markdown("### 📋 Todos os Registros Salvos")
-                        st.dataframe(df_planilha, use_container_width=True)
-                        
-                        # Agrupamento para Gráfico por Data e Tipo
-                        st.markdown("---")
-                        st.markdown("### 📊 Evolução por Data (kcal)")
-                        
-                        df_resumo = df_planilha.groupby(["Data", "Tipo"])["Calorias_Kcal"].sum().unstack().fillna(0)
-                        st.bar_chart(df_resumo)
-                    else:
-                        st.info("A planilha ainda não possui registros.")
-                else:
-                    st.error(f"Erro ao buscar dados. Código HTTP: {res.status_code}")
-            except Exception as e:
-                st.error(f"Erro ao conectar com a planilha: {e}")
+        st.info("Nenhum registro encontrado na planilha até o momento.")
 
 # ---------------------------------------------------------
-# RESUMO DO DIA E BOTÃO DE ENVIAR PARA A PLANILHA
+# RESUMO DOS NOVOS REGISTROS DA SESSÃO ATUAL
 # ---------------------------------------------------------
 st.markdown("---")
 col_t1, col_t2 = st.columns(2)
 
 with col_t1:
-    st.subheader("📋 Comidas de Hoje (Tela)")
+    st.subheader("📋 Novos Comidas (A Salvar)")
     if st.session_state.historico_comida:
         st.dataframe(pd.DataFrame(st.session_state.historico_comida), use_container_width=True)
 
 with col_t2:
-    st.subheader("🏋️‍♂️ Treinos de Hoje (Tela)")
+    st.subheader("🏋️‍♂️ Novos Treinos (A Salvar)")
     if st.session_state.historico_treino:
         st.dataframe(pd.DataFrame(st.session_state.historico_treino), use_container_width=True)
 
-if st.button("💾 Enviar Registro do Dia para o Google Sheets"):
+if st.button("💾 Enviar Registro Novo do Dia para o Google Sheets"):
     if not url_sheets:
         st.error("Configure a variável 'URL_SHEETS' nos Secrets.")
     else:
         try:
             dados_salvar = []
-            hoje = str(date.today())
             
             for c in st.session_state.historico_comida:
                 dados_salvar.append({
-                    "Data": hoje, 
+                    "Data": hoje_str, 
                     "Tipo": "Alimentação", 
                     "Descricao": c["alimento"], 
                     "Calorias_Kcal": c["calorias"]
                 })
             for t in st.session_state.historico_treino:
                 dados_salvar.append({
-                    "Data": hoje, 
+                    "Data": hoje_str, 
                     "Tipo": "Treino", 
                     "Descricao": t["atividade"], 
                     "Calorias_Kcal": t["calorias"]
@@ -284,17 +306,18 @@ if st.button("💾 Enviar Registro do Dia para o Google Sheets"):
                 response = requests.post(url_sheets, json=dados_salvar)
                 if response.status_code == 200:
                     st.balloons()
-                    st.success("Dados salvos com sucesso na Planilha!")
+                    st.success("Novos registros salvos com sucesso na Planilha!")
                     st.session_state.historico_comida = []
                     st.session_state.historico_treino = []
+                    st.rerun()
                 else:
                     st.error(f"Erro ao enviar: Status {response.status_code}")
             else:
-                st.warning("Nenhum registro para salvar hoje.")
+                st.warning("Nenhum registro novo pendente para salvar.")
         except Exception as e:
             st.error(f"Erro de conexão: {e}")
 
-if st.button("🔄 Limpar Tela"):
+if st.button("🔄 Limpar Registros Não Salvos"):
     st.session_state.historico_comida = []
     st.session_state.historico_treino = []
     st.session_state.temp_comida = None
