@@ -296,4 +296,116 @@ with tab_atividade:
                 contents.append(f"Texto do treino: {texto_treino}")
             
             response = client.models.generate_content(model='gemini-3.6-flash', contents=contents)
-            texto_limpo = response.text.replace("```json", "").replace("
+            texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
+            st.session_state.temp_treino = json.loads(texto_limpo)
+            st.success("Gasto estimado com sucesso!")
+        except Exception as e:
+            st.error(f"Erro ao analisar treino: {e}")
+            
+    if st.session_state.temp_treino:
+        st.markdown("### ✏️ Confirmação do Treino")
+        with st.form("form_confirmar_treino"):
+            treino_editado = st.text_input("Atividade", value=st.session_state.temp_treino.get("atividade", ""))
+            kcal_editada = st.number_input("Calorias Queimadas (kcal)", value=int(st.session_state.temp_treino.get("calorias", 0)), step=10)
+            if st.form_submit_button("✅ Adicionar à Fila do Dia"):
+                st.session_state.historico_treino.append({
+                    "data_str": data_sel_br,
+                    "data_obj": data_selecionada,
+                    "atividade": treino_editado,
+                    "calorias": kcal_editada
+                })
+                st.session_state.temp_treino = None
+                st.success(f"Treino adicionado para {data_sel_br}!")
+                st.rerun()
+
+# ---------------------------------------------------------
+# ABA 3: HISTÓRICO E EXCLUSÃO (DATAS FORMATADAS DD/MM/AA)
+# ---------------------------------------------------------
+with tab_consulta:
+    st.subheader("📈 Registros Salvos na Planilha")
+    
+    if dados_planilha:
+        df_planilha = pd.DataFrame(dados_planilha)
+        
+        # Formata explicitamente a coluna de datas para o formato limpo DD/MM/AA
+        df_planilha["Data_Formatada"] = df_planilha["Data"].apply(formatar_data_br)
+        
+        df_exibir = df_planilha[["Data_Formatada", "Tipo", "Descricao", "Calorias_Kcal"]]
+        df_exibir.columns = ["Data", "Tipo", "Descrição / Item", "Calorias (kcal)"]
+        
+        st.dataframe(df_exibir, use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("🗑️ Apagar Registro Salvo")
+        
+        opcoes_deletar = {
+            f"Linha {item['Linha']}: [{formatar_data_br(item['Data'])}] {item['Tipo']} - {item['Descricao']} ({item['Calorias_Kcal']} kcal)": item['Linha']
+            for item in dados_planilha
+        }
+        
+        item_selecionado = st.selectbox("Selecione o item para apagar permanentemente:", list(opcoes_deletar.keys()))
+        
+        if st.button("❌ Apagar Registro Selecionado"):
+            linha_para_apagar = opcoes_deletar[item_selecionado]
+            try:
+                res = requests.post(url_sheets, json={"action": "delete", "rowIndex": linha_para_apagar})
+                if res.status_code == 200:
+                    st.success("Registro apagado com sucesso da Planilha!")
+                    st.rerun()
+                else:
+                    st.error("Erro ao apagar registro.")
+            except Exception as e:
+                st.error(f"Erro de conexão: {e}")
+    else:
+        st.info("Nenhum registro encontrado na planilha.")
+
+# ---------------------------------------------------------
+# RESUMO DA SESSÃO ATUAL (REGISTROS PENDENTES)
+# ---------------------------------------------------------
+st.markdown("---")
+st.subheader(f"📋 Registros Pendentes a Salvar ({data_sel_br})")
+col_t1, col_t2 = st.columns(2)
+
+with col_t1:
+    st.markdown("**Alimentação**")
+    if st.session_state.historico_comida:
+        for idx, item in enumerate(st.session_state.historico_comida):
+            col_a, col_b = st.columns([3, 1])
+            col_a.write(f"• [{item['data_str']}] {item['alimento']} ({item['calorias']} kcal)")
+            if col_b.button("🗑️", key=f"del_c_{idx}"):
+                st.session_state.historico_comida.pop(idx)
+                st.rerun()
+
+with col_t2:
+    st.markdown("**Treinos / Passos**")
+    if st.session_state.historico_treino:
+        for idx, item in enumerate(st.session_state.historico_treino):
+            col_a, col_b = st.columns([3, 1])
+            col_a.write(f"• [{item['data_str']}] {item['atividade']} ({item['calorias']} kcal)")
+            if col_b.button("🗑️", key=f"del_t_{idx}"):
+                st.session_state.historico_treino.pop(idx)
+                st.rerun()
+
+if st.button(f"💾 Enviar Fila ({data_sel_br}) para o Google Sheets"):
+    if not url_sheets:
+        st.error("Configure 'URL_SHEETS' nos Secrets.")
+    else:
+        try:
+            dados_salvar = []
+            for c in st.session_state.historico_comida:
+                dados_salvar.append({"Data": c["data_str"], "Tipo": "Alimentação", "Descricao": c["alimento"], "Calorias_Kcal": c["calorias"]})
+            for t in st.session_state.historico_treino:
+                dados_salvar.append({"Data": t["data_str"], "Tipo": "Treino", "Descricao": t["atividade"], "Calorias_Kcal": t["calorias"]})
+                
+            if dados_salvar:
+                response = requests.post(url_sheets, json={"action": "add", "data": dados_salvar})
+                if response.status_code == 200:
+                    st.balloons()
+                    st.success("Salvo com sucesso na Planilha!")
+                    st.session_state.historico_comida = []
+                    st.session_state.historico_treino = []
+                    st.rerun()
+            else:
+                st.warning("Nenhum registro pendente.")
+        except Exception as e:
+            st.error(f"Erro: {e}")
