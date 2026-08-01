@@ -1,17 +1,18 @@
 import streamlit as st
 import pandas as pd
 import json
+import requests
 from datetime import date
 from google import genai
 from google.genai import types
 from PIL import Image
-from streamlit_gsheets import GSheetsConnection
 
 # Configuração da página
 st.set_page_config(page_title="Diário Calórico & Fitness Pro", page_icon="⚡", layout="centered")
 
-# Busca a chave de API dos Secrets do Streamlit ou da Sidebar
+# Secrets
 api_key = st.secrets.get("GEMINI_API_KEY", None)
+url_sheets = st.secrets.get("URL_SHEETS", None)
 
 # Inicialização de Variáveis de Sessão
 if "historico_comida" not in st.session_state:
@@ -96,14 +97,13 @@ with tab_foto:
                 prompt = (
                     "Analise esta foto de comida. Estime o nome resumido da refeição e a quantidade "
                     "total de calorias. Responda ESTRITAMENTE em formato JSON com duas chaves: "
-                    "'alimento' (string) e 'calorias' (integer). Exemplo: {\"alimento\": \"Prato com Arroz, Feijão e Frango\", \"calorias\": 550}"
+                    "'alimento' (string) e 'calorias' (integer)."
                 )
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=[image, prompt]
                 )
                 
-                # Trata a resposta JSON
                 texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
                 dados = json.loads(texto_limpo)
                 st.session_state.temp_comida = dados
@@ -111,7 +111,6 @@ with tab_foto:
             except Exception as e:
                 st.error(f"Erro ao analisar foto: {e}")
 
-    # Formulário de Confirmação / Retificação da Foto
     if st.session_state.temp_comida:
         st.markdown("### ✏️ Confirmação do Registro")
         with st.form("form_confirmar_foto"):
@@ -129,11 +128,11 @@ with tab_foto:
                 st.rerun()
 
 # ---------------------------------------------------------
-# ABA 2: COMIDA POR TEXTO LIVRE (IA ESTIMADORA)
+# ABA 2: COMIDA POR TEXTO LIVRE
 # ---------------------------------------------------------
 with tab_texto_comida:
-    st.write("Descreva o que você comeu em linguagem natural (ex: *'1 bife de peito de frango do tamanho da palma da mão grelhado'*).")
-    texto_refeicao = st.text_area("O que você comeu?", placeholder="Ex: 2 ovos mexidos com 1 fatia de pão integral e café sem açúcar")
+    st.write("Descreva o que você comeu em linguagem natural.")
+    texto_refeicao = st.text_area("O que você comeu?", placeholder="Ex: 1 bife de peito de frango grelhado do tamanho da palma da mão")
     
     if st.button("🧮 Calcular Calorias por Texto") and texto_refeicao and api_key:
         try:
@@ -161,17 +160,15 @@ with tab_texto_comida:
 with tab_atividade:
     st.write("Grave um áudio ou descreva seu treino para a IA calcular o gasto calórico.")
     
-    # Gravador de Áudio Nativo
     audio_input = st.audio_input("🎙️ Gravador de Áudio (Fale seu treino)")
-    texto_treino = st.text_input("✍️ Ou digite seu treino aqui", placeholder="Ex: Fiz 40 minutos de musculação pesada")
+    texto_treino = st.text_input("✍️ Ou digite seu treino aqui", placeholder="Ex: Fiz 40 minutos de caminhada esteira")
     
     if st.button("🔥 Calcular Gasto do Treino") and api_key:
         try:
             client = genai.Client(api_key=api_key)
             prompt = (
-                f"O usuário tem {peso}kg. Analise a atividade física informada (seja áudio ou texto) e estime o gasto energético em kcal. "
-                "Responda ESTRITAMENTE em formato JSON com as chaves 'atividade' (string) e 'calorias' (integer). "
-                "Exemplo: {\"atividade\": \"Musculação (40 min)\", \"calorias\": 220}"
+                f"O usuário tem {peso}kg. Analise a atividade física informada e estime o gasto energético em kcal. "
+                "Responda ESTRITAMENTE em formato JSON com as chaves 'atividade' (string) e 'calorias' (integer)."
             )
             
             contents = [prompt]
@@ -193,7 +190,6 @@ with tab_atividade:
         except Exception as e:
             st.error(f"Erro ao analisar atividade: {e}")
             
-    # Formulário de Confirmação do Treino
     if st.session_state.temp_treino:
         st.markdown("### ✏️ Confirmação do Treino")
         with st.form("form_confirmar_treino"):
@@ -211,7 +207,7 @@ with tab_atividade:
                 st.rerun()
 
 # ---------------------------------------------------------
-# TABELAS DE RESUMO DO DIA E SALVAMENTO EM SHEETS
+# TABELAS DE RESUMO DO DIA E ENVIO VIA WEBHOOK
 # ---------------------------------------------------------
 st.markdown("---")
 col_t1, col_t2 = st.columns(2)
@@ -219,41 +215,48 @@ col_t1, col_t2 = st.columns(2)
 with col_t1:
     st.subheader("📋 Comidas Registradas")
     if st.session_state.historico_comida:
-        df_comida = pd.DataFrame(st.session_state.historico_comida)
-        st.dataframe(df_comida, use_container_width=True)
+        st.dataframe(pd.DataFrame(st.session_state.historico_comida), use_container_width=True)
 
 with col_t2:
     st.subheader("🏋️‍♂️ Treinos Registrados")
     if st.session_state.historico_treino:
-        df_treino = pd.DataFrame(st.session_state.historico_treino)
-        st.dataframe(df_treino, use_container_width=True)
+        st.dataframe(pd.DataFrame(st.session_state.historico_treino), use_container_width=True)
 
 # BOTÃO DE ENVIAR PARA GOOGLE SHEETS
 if st.button("💾 Enviar Registro do Dia para o Google Sheets"):
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        
-        # Consolida refeições e treinos
-        dados_salvar = []
-        hoje = str(date.today())
-        
-        for c in st.session_state.historico_comida:
-            dados_salvar.append({"Data": hoje, "Tipo": "Alimentacao", "Descricao": c["alimento"], "Calorias_Kcal": c["calorias"]})
-        for t in st.session_state.historico_treino:
-            dados_salvar.append({"Data": hoje, "Tipo": "Treino", "Descricao": t["atividade"], "Calorias_Kcal": t["calorias"]})
+    if not url_sheets:
+        st.error("Configure a variável 'URL_SHEETS' nos Secrets do Streamlit Cloud.")
+    else:
+        try:
+            dados_salvar = []
+            hoje = str(date.today())
             
-        if dados_salvar:
-            df_novos = pd.DataFrame(dados_salvar)
-            # Lê planilha existente e adiciona novos dados
-            df_existente = conn.read()
-            df_final = pd.concat([df_existente, df_novos], ignore_index=True)
-            conn.update(data=df_final)
-            st.balloons()
-            st.success("Dados salvos com sucesso na sua Planilha do Google!")
-        else:
-            st.warning("Nenhum registro para salvar hoje.")
-    except Exception as e:
-        st.error(f"Configure o conector do Google Sheets nos Secrets. Erro: {e}")
+            for c in st.session_state.historico_comida:
+                dados_salvar.append({
+                    "Data": hoje, 
+                    "Tipo": "Alimentação", 
+                    "Descricao": c["alimento"], 
+                    "Calorias_Kcal": c["calorias"]
+                })
+            for t in st.session_state.historico_treino:
+                dados_salvar.append({
+                    "Data": hoje, 
+                    "Tipo": "Treino", 
+                    "Descricao": t["atividade"], 
+                    "Calorias_Kcal": t["calorias"]
+                })
+                
+            if dados_salvar:
+                response = requests.post(url_sheets, json=dados_salvar)
+                if response.status_code == 200:
+                    st.balloons()
+                    st.success("Dados salvos com sucesso na sua Planilha do Google!")
+                else:
+                    st.error(f"Erro ao enviar para a planilha: Status {response.status_code}")
+            else:
+                st.warning("Nenhum registro para salvar hoje.")
+        except Exception as e:
+            st.error(f"Erro ao conectar com a planilha: {e}")
 
 if st.button("🔄 Zerar Tela"):
     st.session_state.historico_comida = []
