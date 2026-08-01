@@ -8,7 +8,100 @@ from google.genai import types
 from PIL import Image
 
 # Configuração da página
-st.set_page_config(page_title="Diário Calórico Pro", page_icon="⚡", layout="wide")
+st.set_page_config(
+    page_title="Diário Calórico Pro",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# --- CSS CUSTOMIZADO PARA OTIMIZAÇÃO MOBILE ---
+st.markdown("""
+<style>
+    /* Estilização Geral e Responsividade */
+    .stApp {
+        background-color: #0e1117;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    
+    /* Redução de margens topo em dispositivos móveis */
+    .block-container {
+        padding-top: 1.5rem !important;
+        padding-bottom: 3rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+
+    /* Cards Personalizados para Métricas */
+    .metric-card {
+        background: linear-gradient(135deg, #1e222d 0%, #171922 100%);
+        border: 1px solid #2d3243;
+        border-radius: 14px;
+        padding: 14px 10px;
+        text-align: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+        margin-bottom: 8px;
+    }
+    .metric-title {
+        font-size: 0.75rem;
+        color: #8b949e;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+    }
+    .metric-value {
+        font-size: 1.25rem;
+        font-weight: 800;
+        color: #f0f6fc;
+    }
+    .metric-sub {
+        font-size: 0.7rem;
+        font-weight: 600;
+        margin-top: 2px;
+    }
+
+    /* Estilização das Abas Mobile */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px;
+        background-color: #161b22;
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid #30363d;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 42px;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #8b949e;
+        padding: 0 10px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #238636 !important;
+        color: #ffffff !important;
+    }
+
+    /* Botões Tocáveis e Arredondados */
+    .stButton>button {
+        width: 100%;
+        border-radius: 12px;
+        height: 44px;
+        font-weight: 700;
+        font-size: 0.95rem;
+        border: none;
+        transition: all 0.2s ease-in-out;
+    }
+    .stButton>button:active {
+        transform: scale(0.98);
+    }
+
+    /* Campos de Entrada Formatações */
+    .stTextInput input, .stNumberInput input, .stSelectbox div {
+        border-radius: 10px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Secrets
 api_key = st.secrets.get("GEMINI_API_KEY", None)
@@ -44,7 +137,7 @@ def buscar_dados_planilha():
         pass
     return {"perfil": {}, "historico": []}
 
-# Carrega dados
+# Carrega dados remotos
 dados_remotos = buscar_dados_planilha()
 perfil_remoto = dados_remotos.get("perfil", {})
 dados_planilha = dados_remotos.get("historico", [])
@@ -59,14 +152,15 @@ if "temp_comida" not in st.session_state:
 if "temp_treino" not in st.session_state:
     st.session_state.temp_treino = None
 
-# TÍTULO E SELETOR DE DATA
-st.title("⚡ Diário Calórico & Fitness")
+# CABEÇALHO PRINCIPAL
+st.markdown("<h2 style='text-align: center; font-weight: 800; margin-bottom: 5px;'>⚡ Diário Calórico Pro</h2>", unsafe_allow_html=True)
 
-col_dt1, col_dt2 = st.columns([2, 1])
-data_selecionada = col_dt1.date_input("📅 Data de Registro / Visualização", value=date.today())
+# SELETOR DE DATA DEDICADO
+col_dt1, col_dt2 = st.columns([3, 1])
+data_selecionada = col_dt1.date_input("📅 Data Ativa", value=date.today(), label_visibility="collapsed")
 data_sel_br = data_selecionada.strftime("%d/%m/%y")
 
-if col_dt2.button("🔄 Recarregar Dados"):
+if col_dt2.button("🔄", help="Atualizar dados"):
     st.rerun()
 
 # SIDEBAR: PERFIL
@@ -107,7 +201,7 @@ if st.sidebar.button("💾 Salvar Parâmetros na Planilha"):
         except Exception as e:
             st.sidebar.error(f"Erro: {e}")
 
-# CÁLCULOS DE CALORIAS
+# CÁLCULOS DO DIA
 kcal_comida_planilha_dia = sum(
     int(item.get("Calorias_Kcal", 0)) 
     for item in dados_planilha 
@@ -129,45 +223,83 @@ gasto_exercicio_total = kcal_treino_planilha_dia + gasto_treinos_sessao
 saldo_restante = meta_base - consumido_total
 deficit_dia = (meta_base + gasto_exercicio_total) - consumido_total
 
-# DASHBOARD EM 5 COLUNAS
-st.caption(f"Exibindo dados para o dia: **{data_sel_br}**")
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Meta Base", f"{meta_base} kcal")
-col2.metric("Gasto Atividades", f"+{gasto_exercicio_total} kcal")
-col3.metric("Consumido", f"{consumido_total} kcal")
-col4.metric("Falta Consumir", f"{saldo_restante} kcal", delta_color="inverse")
-col5.metric("🔥 Déficit do Dia", f"{deficit_dia} kcal", delta_color="normal" if deficit_dia >= 0 else "inverse")
+# DASHBOARD EM CARDS ADAPTÁVEIS PARA MOBILE
+st.markdown(f"<p style='text-align:center; color:#8b949e; font-size:0.8rem; margin-top:-5px;'>Data selecionada: <b>{data_sel_br}</b></p>", unsafe_allow_html=True)
 
-# BARRA DE PROGRESSO COLORIDA
+# Linha 1: Meta Base & Gastos
+r1_c1, r1_c2 = st.columns(2)
+with r1_c1:
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">🎯 Meta Base</div>
+            <div class="metric-value">{meta_base} <span style="font-size:0.8rem;">kcal</span></div>
+        </div>
+    """, unsafe_allow_html=True)
+with r1_c2:
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">🏃‍♂️ Atividades</div>
+            <div class="metric-value" style="color:#2ba640;">+{gasto_exercicio_total} <span style="font-size:0.8rem;">kcal</span></div>
+        </div>
+    """, unsafe_allow_html=True)
+
+# Linha 2: Consumido & Falta Consumir
+r2_c1, r2_c2 = st.columns(2)
+with r2_c1:
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">🍽️ Consumido</div>
+            <div class="metric-value">{consumido_total} <span style="font-size:0.8rem;">kcal</span></div>
+        </div>
+    """, unsafe_allow_html=True)
+with r2_c2:
+    cor_falta = "#e3b341" if saldo_restante >= 0 else "#f85149"
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">⏳ Falta Consumir</div>
+            <div class="metric-value" style="color:{cor_falta};">{saldo_restante} <span style="font-size:0.8rem;">kcal</span></div>
+        </div>
+    """, unsafe_allow_html=True)
+
+# Linha 3: Card Destacado para o Déficit do Dia
+cor_def = "#238636" if deficit_dia >= 0 else "#da3633"
+st.markdown(f"""
+    <div class="metric-card" style="border: 1px solid {cor_def}; background: rgba(22, 27, 34, 0.8);">
+        <div class="metric-title" style="color:#ffffff;">🔥 Déficit Real Estimado do Dia</div>
+        <div class="metric-value" style="color:{cor_def}; font-size:1.4rem;">{deficit_dia} <span style="font-size:0.85rem;">kcal</span></div>
+    </div>
+""", unsafe_allow_html=True)
+
+# BARRA DE PROGRESSO DINÂMICA
 porcentagem = (consumido_total / meta_base * 100) if meta_base > 0 else 0
 largura_barra = min(porcentagem, 100)
 
 if porcentagem < 80:
-    cor_barra = "#28a745"
-    mensagem_status = f"🟢 Consumo dentro da meta base ({porcentagem:.1f}%)"
+    cor_barra = "#238636"
+    mensagem_status = f"🟢 Consumo dentro da meta ({porcentagem:.1f}%)"
 elif porcentagem <= 100:
-    cor_barra = "#ffc107"
-    mensagem_status = f"⚠️ ATENÇÃO! Quase atingindo a meta base ({porcentagem:.1f}%)"
+    cor_barra = "#d29922"
+    mensagem_status = f"⚠️ Atenção! Quase atingindo a meta ({porcentagem:.1f}%)"
 else:
-    cor_barra = "#dc3545"
+    cor_barra = "#da3633"
     mensagem_status = f"🚨 META BASE EXCEDIDA! ({porcentagem:.1f}%)"
 
 st.markdown(f"""
-    <div style="background-color: #262730; border-radius: 10px; padding: 4px; margin-top: 10px;">
-        <div style="background-color: {cor_barra}; width: {largura_barra}%; height: 22px; border-radius: 8px; text-align: center; color: white; font-weight: bold; font-size: 13px; line-height: 22px;">
+    <div style="background-color: #21262d; border-radius: 10px; padding: 3px; margin-top: 8px;">
+        <div style="background-color: {cor_barra}; width: {largura_barra}%; height: 18px; border-radius: 7px; text-align: center; color: white; font-weight: 700; font-size: 11px; line-height: 18px;">
             {porcentagem:.0f}%
         </div>
     </div>
-    <p style="text-align: center; font-weight: bold; margin-top: 6px; color: {cor_barra};">{mensagem_status}</p>
+    <p style="text-align: center; font-weight: 700; font-size:0.85rem; margin-top: 5px; color: {cor_barra};">{mensagem_status}</p>
 """, unsafe_allow_html=True)
 
-st.markdown("---")
+st.markdown("<hr style='margin: 10px 0; border-color: #30363d;'>", unsafe_allow_html=True)
 
-# ABAS DO APP
+# ABAS DO NAVEGADOR PRINCIPAL
 tab_comida, tab_atividade, tab_consulta = st.tabs([
-    "🍽️ Registrar Comida (Foto / Texto / Áudio)", 
-    "🏃‍♂️/🎙️ Exercícios & Passos",
-    "📊 Histórico & Gerenciar Registros"
+    "🍽️ Comida", 
+    "🏃‍♂️ Exercícios",
+    "📊 Histórico"
 ])
 
 # ---------------------------------------------------------
@@ -177,8 +309,8 @@ with tab_comida:
     sub_foto, sub_texto, sub_audio = st.tabs(["📸 Foto", "✍️ Texto", "🎙️ Áudio"])
     
     with sub_foto:
-        foto = st.file_uploader("Tire uma foto do prato", type=["jpg", "jpeg", "png"], key="upload_foto")
-        obs_foto = st.text_input("Observação / Detalhes para a IA (opcional)", placeholder="Ex: Bananada sem açúcar, frango na air fryer sem óleo")
+        foto = st.file_uploader("Enviar foto do prato", type=["jpg", "jpeg", "png"], key="upload_foto")
+        obs_foto = st.text_input("Observação para a IA (opcional)", placeholder="Ex: Bananada sem açúcar, frango na air fryer")
         
         if foto and api_key:
             image = Image.open(foto)
@@ -195,8 +327,8 @@ with tab_comida:
                     st.error(f"Erro: {e}")
 
     with sub_texto:
-        texto_refeicao = st.text_area("Descreva o que você comeu", placeholder="Ex: 1 bife de frango grelhado")
-        if st.button("🧮 Calcular Calorias por Texto") and texto_refeicao and api_key:
+        texto_refeicao = st.text_area("Descreva a refeição", placeholder="Ex: 1 bife de frango grelhado")
+        if st.button("🧮 Calcular por Texto") and texto_refeicao and api_key:
             try:
                 client = genai.Client(api_key=api_key)
                 prompt = f"O usuário comeu: '{texto_refeicao}'. Estime a refeição e calorias. Responda ESTRITAMENTE em JSON: {{\"alimento\": \"string\", \"calorias\": integer}}"
@@ -208,7 +340,7 @@ with tab_comida:
                 st.error(f"Erro: {e}")
 
     with sub_audio:
-        audio_comida = st.audio_input("🎙️ Fale o que você comeu")
+        audio_comida = st.audio_input("🎙️ Gravador de Áudio")
         if st.button("🎙️ Analisar Áudio da Comida") and audio_comida and api_key:
             try:
                 client = genai.Client(api_key=api_key)
@@ -224,7 +356,7 @@ with tab_comida:
 
     if st.session_state.temp_comida:
         st.markdown("---")
-        st.markdown("### ✏️ Confirmar / Retificar Refeição")
+        st.markdown("##### ✏️ Confirmar / Retificar Refeição")
         with st.form("form_confirmar_comida"):
             nome_editado = st.text_input("Descrição", value=st.session_state.temp_comida.get("alimento", ""))
             calorias_editadas = st.number_input("Calorias (kcal)", value=int(st.session_state.temp_comida.get("calorias", 0)), step=10)
@@ -234,20 +366,19 @@ with tab_comida:
                     "alimento": nome_editado, "calorias": calorias_editadas
                 })
                 st.session_state.temp_comida = None
-                st.success("Adicionado com sucesso!")
+                st.success("Adicionado!")
                 st.rerun()
 
 # ---------------------------------------------------------
-# ABA 2: EXERCÍCIOS
+# ABA 2: EXERCÍCIOS & PASSOS
 # ---------------------------------------------------------
 with tab_atividade:
-    st.subheader("🏃‍♂️ Contador de Passos")
-    col_p1, col_p2 = st.columns([2, 1])
-    passos = col_p1.number_input("Número de Passos do Dia", value=0, step=500)
+    st.markdown("##### 🏃‍♂️ Passos do Dia")
+    passos = st.number_input("Número de Passos", value=0, step=500, label_visibility="collapsed")
     calorias_passos = int(passos * 0.04 * (peso / 70.0))
-    col_p2.metric("Gasto Estimado", f"{calorias_passos} kcal")
+    st.caption(f"Gasto dos passos: **~{calorias_passos} kcal**")
     
-    if col_p2.button("➕ Adicionar Passos"):
+    if st.button("➕ Adicionar Passos"):
         if calorias_passos > 0:
             st.session_state.historico_treino.append({
                 "data_str": data_sel_br, "data_obj": data_selecionada,
@@ -257,9 +388,9 @@ with tab_atividade:
             st.rerun()
             
     st.markdown("---")
-    st.subheader("🏋️‍♂️ Exercícios (Áudio ou Texto)")
+    st.markdown("##### 🏋️‍♂️ Outros Exercícios")
     audio_input = st.audio_input("🎙️ Gravador de Áudio do Treino")
-    texto_treino = st.text_input("✍️ Ou digite seu treino aqui", placeholder="Ex: 30 minutos de bicicleta ergométrica")
+    texto_treino = st.text_input("✍️ Digite o treino", placeholder="Ex: 30 min de bicicleta")
     
     if st.button("🔥 Calcular Gasto do Treino") and api_key:
         try:
@@ -279,11 +410,11 @@ with tab_atividade:
             st.error(f"Erro: {e}")
             
     if st.session_state.temp_treino:
-        st.markdown("### ✏️ Confirmação do Treino")
+        st.markdown("##### ✏️ Confirmar Treino")
         with st.form("form_confirmar_treino"):
             treino_editado = st.text_input("Atividade", value=st.session_state.temp_treino.get("atividade", ""))
-            kcal_editada = st.number_input("Calorias Queimadas (kcal)", value=int(st.session_state.temp_treino.get("calorias", 0)), step=10)
-            if st.form_submit_button("✅ Adicionar à Fila do Dia"):
+            kcal_editada = st.number_input("Calorias (kcal)", value=int(st.session_state.temp_treino.get("calorias", 0)), step=10)
+            if st.form_submit_button("✅ Adicionar à Fila"):
                 st.session_state.historico_treino.append({
                     "data_str": data_sel_br, "data_obj": data_selecionada,
                     "atividade": treino_editado, "calorias": kcal_editada
@@ -293,19 +424,17 @@ with tab_atividade:
                 st.rerun()
 
 # ---------------------------------------------------------
-# ABA 3: HISTÓRICO COM BUSCA E DELEÇÃO MÚLTIPLA
+# ABA 3: HISTÓRICO E EXCLUSÃO
 # ---------------------------------------------------------
 with tab_consulta:
-    st.subheader("📈 Consulta e Gerenciamento do Histórico")
+    st.markdown("##### 📈 Histórico na Planilha")
     
     if dados_planilha:
         df_planilha = pd.DataFrame(dados_planilha)
         df_planilha["Data_Formatada"] = df_planilha["Data"].apply(formatar_data_br)
         
-        # BARRA DE PESQUISA / FILTRO
-        termo_busca = st.text_input("🔍 Pesquisar no histórico por item, tipo ou data:", placeholder="Ex: Frango, Bicicleta, 01/08/26...")
+        termo_busca = st.text_input("🔍 Pesquisar no Histórico", placeholder="Ex: Frango, Bicicleta, 01/08/26")
         
-        # Filtra a tabela conforme a busca
         df_filtrado = df_planilha.copy()
         if termo_busca:
             mask = (
@@ -315,77 +444,72 @@ with tab_consulta:
             )
             df_filtrado = df_filtrado[mask]
         
-        # EXIBIÇÃO EM TABELA INTERATIVA
-        st.markdown("### 📋 Tabela de Registros")
         df_exibir = df_filtrado[["Data_Formatada", "Tipo", "Descricao", "Calorias_Kcal"]].copy()
-        df_exibir.columns = ["Data", "Tipo", "Descrição / Item", "Calorias (kcal)"]
+        df_exibir.columns = ["Data", "Tipo", "Descrição / Item", "kcal"]
         st.dataframe(df_exibir, use_container_width=True)
         
         st.markdown("---")
-        st.subheader("🗑️ Excluir Vários Registros da Planilha")
+        st.markdown("##### 🗑️ Apagar Vários Registros")
         
-        # Mapeia opções para deleção múltipla
         opcoes_deletar = {
-            f"Linha {item['Linha']}: [{formatar_data_br(item['Data'])}] {item['Tipo']} - {item['Descricao']} ({item['Calorias_Kcal']} kcal)": item['Linha']
+            f"L{item['Linha']}: [{formatar_data_br(item['Data'])}] {item['Descricao']} ({item['Calorias_Kcal']} kcal)": item['Linha']
             for item in df_filtrado.to_dict(orient="records")
         }
         
         itens_selecionados = st.multiselect(
-            "Marque um ou vários registros para apagar de uma vez:",
+            "Selecione itens para apagar:",
             options=list(opcoes_deletar.keys())
         )
         
-        if st.button("❌ Apagar Registros Selecionados"):
+        if st.button("❌ Apagar Selecionados"):
             if itens_selecionados:
                 linhas_para_apagar = [opcoes_deletar[item] for item in itens_selecionados]
                 try:
                     res = requests.post(url_sheets, json={"action": "delete_multiple", "rowIndexes": linhas_para_apagar})
                     if res.status_code == 200:
-                        st.success(f"{len(linhas_para_apagar)} registro(s) apagado(s) com sucesso!")
+                        st.success(f"{len(linhas_para_apagar)} item(s) apagado(s)!")
                         st.rerun()
                     else:
-                        st.error("Erro ao apagar registros.")
+                        st.error("Erro ao apagar.")
                 except Exception as e:
-                    st.error(f"Erro de conexão: {e}")
-            else:
-                st.warning("Selecione pelo menos um registro para apagar.")
+                    st.error(f"Erro: {e}")
     else:
-        st.info("Nenhum registro encontrado na planilha.")
+        st.info("Planilha vazia.")
 
 # ---------------------------------------------------------
-# RESUMO DA SESSÃO ATUAL (REGISTROS PENDENTES COMO TABELA)
+# REGISTROS PENDENTES A SALVAR
 # ---------------------------------------------------------
-st.markdown("---")
-st.subheader(f"📋 Registros Pendentes a Salvar ({data_sel_br})")
+st.markdown("<hr style='margin: 15px 0; border-color: #30363d;'>", unsafe_allow_html=True)
+st.markdown(f"##### 📋 Fila Pendente para Salvar ({data_sel_br})")
 
 col_t1, col_t2 = st.columns(2)
 
 with col_t1:
-    st.markdown("**Refeições Pendentes**")
+    st.caption("**Refeições**")
     if st.session_state.historico_comida:
-        df_pend_comida = pd.DataFrame(st.session_state.historico_comida)[["data_str", "alimento", "calorias"]]
-        df_pend_comida.columns = ["Data", "Alimento", "Calorias (kcal)"]
+        df_pend_comida = pd.DataFrame(st.session_state.historico_comida)[["alimento", "calorias"]]
+        df_pend_comida.columns = ["Item", "kcal"]
         st.dataframe(df_pend_comida, use_container_width=True)
-        if st.button("🗑️ Limpar Refeições Pendentes"):
+        if st.button("🗑️ Limpar Comidas"):
             st.session_state.historico_comida = []
             st.rerun()
     else:
-        st.caption("Nenhuma refeição pendente.")
+        st.caption("Nenhuma comida.")
 
 with col_t2:
-    st.markdown("**Treinos / Passos Pendentes**")
+    st.caption("**Treinos**")
     if st.session_state.historico_treino:
-        df_pend_treino = pd.DataFrame(st.session_state.historico_treino)[["data_str", "atividade", "calorias"]]
-        df_pend_treino.columns = ["Data", "Atividade", "Calorias (kcal)"]
+        df_pend_treino = pd.DataFrame(st.session_state.historico_treino)[["atividade", "calorias"]]
+        df_pend_treino.columns = ["Item", "kcal"]
         st.dataframe(df_pend_treino, use_container_width=True)
-        if st.button("🗑️ Limpar Treinos Pendentes"):
+        if st.button("🗑️ Limpar Treinos"):
             st.session_state.historico_treino = []
             st.rerun()
     else:
-        st.caption("Nenhum treino pendente.")
+        st.caption("Nenhum treino.")
 
 st.markdown("<br>", unsafe_allow_html=True)
-if st.button(f"💾 Enviar Fila ({data_sel_br}) para o Google Sheets"):
+if st.button(f"💾 ENVIAR REGISTROS PARA GOOGLE SHEETS"):
     if not url_sheets:
         st.error("Configure 'URL_SHEETS' nos Secrets.")
     else:
@@ -400,7 +524,7 @@ if st.button(f"💾 Enviar Fila ({data_sel_br}) para o Google Sheets"):
                 response = requests.post(url_sheets, json={"action": "add", "data": dados_salvar})
                 if response.status_code == 200:
                     st.balloons()
-                    st.success("Salvo com sucesso na Planilha!")
+                    st.success("Salvo no Google Sheets!")
                     st.session_state.historico_comida = []
                     st.session_state.historico_treino = []
                     st.rerun()
