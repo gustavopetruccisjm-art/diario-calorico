@@ -14,22 +14,25 @@ st.set_page_config(page_title="Diário Calórico Pro", page_icon="⚡", layout="
 api_key = st.secrets.get("GEMINI_API_KEY", None)
 url_sheets = st.secrets.get("URL_SHEETS", None)
 
-# --- FUNÇÃO PARA BUSCAR DADOS DA PLANILHA ---
+hoje_data = date.today()
+hoje_str_br = hoje_data.strftime("%d/%m/%y")
+
+# --- FUNÇÃO PARA BUSCAR DADOS (PERFIL + HISTÓRICO) DA PLANILHA ---
 def buscar_dados_planilha():
     if not url_sheets:
-        return []
+        return {"perfil": {}, "historico": []}
     try:
         res = requests.get(url_sheets)
         if res.status_code == 200:
-            dados = res.json()
-            # Limpa o formato de data ISO (ex: "2026-08-01T03:00:00.000Z" -> "2026-08-01")
-            for item in dados:
-                if "Data" in item and item["Data"]:
-                    item["Data"] = str(item["Data"]).split("T")[0]
-            return dados
+            return res.json()
     except Exception:
         pass
-    return []
+    return {"perfil": {}, "historico": []}
+
+# Carrega dados do Google Sheets
+dados_remotos = buscar_dados_planilha()
+perfil_remoto = dados_remotos.get("perfil", {})
+dados_planilha = dados_remotos.get("historico", [])
 
 # Inicialização de Variáveis de Sessão
 if "historico_comida" not in st.session_state:
@@ -41,33 +44,20 @@ if "temp_comida" not in st.session_state:
 if "temp_treino" not in st.session_state:
     st.session_state.temp_treino = None
 
-# Busca os dados da planilha
-dados_planilha = buscar_dados_planilha()
-hoje_str = str(date.today())
-
-# --- CÁLCULO DE CALORIAS SALVAS HOJE NA PLANILHA ---
-kcal_comida_planilha_hoje = sum(
-    int(item.get("Calorias_Kcal", 0)) 
-    for item in dados_planilha 
-    if item.get("Data") == hoje_str and item.get("Tipo") in ["Alimentação", "Alimentacao"]
-)
-
-kcal_treino_planilha_hoje = sum(
-    int(item.get("Calorias_Kcal", 0)) 
-    for item in dados_planilha 
-    if item.get("Data") == hoje_str and item.get("Tipo") == "Treino"
-)
-
-# --- SIDEBAR: PERFIL & METAS ---
+# --- SIDEBAR: PERFIL & PARÂMETROS ---
 st.sidebar.header("📊 Perfil & Parâmetros")
 
 if not api_key:
     api_key = st.sidebar.text_input("Chave da API Google Gemini", type="password")
 
-sexo = st.sidebar.selectbox("Sexo", ["Masculino", "Feminino"])
-idade = st.sidebar.number_input("Idade", value=30, step=1)
-peso = st.sidebar.number_input("Peso (kg)", value=75.0, step=0.5)
-altura = st.sidebar.number_input("Altura (cm)", value=175, step=1)
+# Valores padrão oriundos da planilha
+sexo_def = perfil_remoto.get("Sexo", "Masculino")
+idx_sexo = 0 if sexo_def == "Masculino" else 1
+
+sexo = st.sidebar.selectbox("Sexo", ["Masculino", "Feminino"], index=idx_sexo)
+idade = st.sidebar.number_input("Idade", value=int(perfil_remoto.get("Idade", 30)), step=1)
+peso = st.sidebar.number_input("Peso (kg)", value=float(perfil_remoto.get("Peso", 75.0)), step=0.5)
+altura = st.sidebar.number_input("Altura (cm)", value=int(perfil_remoto.get("Altura", 175)), step=1)
 
 # Cálculo TMB
 if sexo == "Masculino":
@@ -78,21 +68,49 @@ else:
 st.sidebar.subheader("Taxa Basal")
 st.sidebar.write(f"**TMB (Repouso):** {int(tmb)} kcal")
 
-meta_base = st.sidebar.number_input("Meta Calórica Base (kcal)", value=int(tmb * 1.2), step=50)
+meta_base_def = int(perfil_remoto.get("Meta_Base", int(tmb * 1.2)))
+meta_base = st.sidebar.number_input("Meta Calórica Base (kcal)", value=meta_base_def, step=50)
 
-# --- PASSOS DO DIA ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("🏃‍♂️ Passos do Dia")
-passos = st.sidebar.number_input("Número de Passos", value=0, step=500)
-calorias_passos = int(passos * 0.04 * (peso / 70.0))
-st.sidebar.caption(f"Gasto dos passos: ~{calorias_passos} kcal")
+if st.sidebar.button("💾 Salvar Parâmetros na Planilha"):
+    if url_sheets:
+        try:
+            payload = {
+                "action": "update_profile",
+                "perfil": {
+                    "Sexo": sexo,
+                    "Idade": idade,
+                    "Peso": peso,
+                    "Altura": altura,
+                    "Meta_Base": meta_base
+                }
+            }
+            res = requests.post(url_sheets, json=payload)
+            if res.status_code == 200:
+                st.sidebar.success("Parâmetros atualizados na planilha!")
+                st.rerun()
+            else:
+                st.sidebar.error("Erro ao salvar perfil.")
+        except Exception as e:
+            st.sidebar.error(f"Erro: {e}")
 
-# CÁLCULOS TOTAIS DO DIA (Planilha + Sessão Atual)
+# --- CÁLCULO DE CALORIAS SALVAS HOJE NA PLANILHA ---
+kcal_comida_planilha_hoje = sum(
+    int(item.get("Calorias_Kcal", 0)) 
+    for item in dados_planilha 
+    if item.get("Data") == hoje_str_br and item.get("Tipo") in ["Alimentação", "Alimentacao"]
+)
+
+kcal_treino_planilha_hoje = sum(
+    int(item.get("Calorias_Kcal", 0)) 
+    for item in dados_planilha 
+    if item.get("Data") == hoje_str_br and item.get("Tipo") in ["Treino", "Passos"]
+)
+
 consumido_sessao = sum(item["calorias"] for item in st.session_state.historico_comida)
 gasto_treinos_sessao = sum(item["calorias"] for item in st.session_state.historico_treino)
 
 consumido_total = kcal_comida_planilha_hoje + consumido_sessao
-gasto_exercicio_total = kcal_treino_planilha_hoje + gasto_treinos_sessao + calorias_passos
+gasto_exercicio_total = kcal_treino_planilha_hoje + gasto_treinos_sessao
 
 meta_ajustada = meta_base + gasto_exercicio_total
 saldo_restante = meta_ajustada - consumido_total
@@ -107,219 +125,257 @@ col2.metric("Gasto Atividades", f"+{gasto_exercicio_total} kcal")
 col3.metric("Consumido Hoje", f"{consumido_total} kcal")
 col4.metric("Falta Consumir", f"{saldo_restante} kcal", delta_color="inverse")
 
-st.progress(min(max(consumido_total / meta_ajustada if meta_ajustada > 0 else 0.0, 0.0), 1.0))
+# --- BARRA DE PROGRESSO COM CORES DINÂMICAS ---
+porcentagem = (consumido_total / meta_ajustada * 100) if meta_ajustada > 0 else 0
+largura_barra = min(porcentagem, 100)
+
+if porcentagem < 80:
+    cor_barra = "#28a745" # Verde
+    mensagem_status = f"🟢 Consumo dentro do previsto ({porcentagem:.1f}%)"
+elif porcentagem <= 100:
+    cor_barra = "#ffc107" # Amarelo
+    mensagem_status = f"⚠️ ATENÇÃO! Quase estourando a meta ({porcentagem:.1f}%)"
+else:
+    cor_barra = "#dc3545" # Vermelho
+    mensagem_status = f"🚨 META ESTOURADA! ({porcentagem:.1f}%)"
+
+st.markdown(f"""
+    <div style="background-color: #262730; border-radius: 10px; padding: 4px; margin-top: 10px;">
+        <div style="background-color: {cor_barra}; width: {largura_barra}%; height: 22px; border-radius: 8px; text-align: center; color: white; font-weight: bold; font-size: 13px; line-height: 22px;">
+            {porcentagem:.0f}%
+        </div>
+    </div>
+    <p style="text-align: center; font-weight: bold; margin-top: 6px; color: {cor_barra};">{mensagem_status}</p>
+""", unsafe_allow_html=True)
+
 st.markdown("---")
 
 # ABAS DE NAVEGAÇÃO
-tab_foto, tab_texto_comida, tab_atividade, tab_consulta = st.tabs([
-    "📸 Foto de Comida", 
-    "✍️ Comida por Texto", 
-    "🎙️/✍️ Exercício",
-    "📊 Histórico na Planilha"
+tab_comida, tab_atividade, tab_consulta = st.tabs([
+    "🍽️ Registrar Comida (Foto / Texto / Áudio)", 
+    "🏃‍♂️/🎙️ Exercícios & Passos",
+    "📊 Histórico & Gerenciar Registros"
 ])
 
 # ---------------------------------------------------------
-# ABA 1: FOTO DE COMIDA
+# ABA 1: REFEIÇÃO (FOTO, TEXTO OU ÁUDIO)
 # ---------------------------------------------------------
-with tab_foto:
-    foto = st.file_uploader("Tire uma foto ou envie do celular", type=["jpg", "jpeg", "png"])
+with tab_comida:
+    sub_foto, sub_texto, sub_audio = st.tabs(["📸 Foto", "✍️ Texto", "🎙️ Áudio"])
     
-    if foto and api_key:
-        image = Image.open(foto)
-        st.image(image, caption="Foto enviada", use_container_width=True)
+    # 📸 Sub-aba Foto com Campo de Observação
+    with sub_foto:
+        foto = st.file_uploader("Tire uma foto do prato", type=["jpg", "jpeg", "png"], key="upload_foto")
+        obs_foto = st.text_input("Observação / Detalhes para a IA (opcional)", placeholder="Ex: Bananada sem açúcar, frango na air fryer sem óleo")
         
-        if st.button("🔍 Analisar Imagem com IA"):
+        if foto and api_key:
+            image = Image.open(foto)
+            st.image(image, caption="Foto enviada", use_container_width=True)
+            if st.button("🔍 Analisar Foto com IA"):
+                try:
+                    client = genai.Client(api_key=api_key)
+                    prompt = (
+                        f"Analise esta foto de comida. Considere também a seguinte observação informada pelo usuário: '{obs_foto}'. "
+                        "Estime o nome resumido da refeição e as calorias totais. "
+                        "Responda ESTRITAMENTE em JSON com o formato: {\"alimento\": \"string\", \"calorias\": integer}"
+                    )
+                    response = client.models.generate_content(model='gemini-3.6-flash', contents=[image, prompt])
+                    texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
+                    st.session_state.temp_comida = json.loads(texto_limpo)
+                    st.success("Análise concluída! Confirme abaixo.")
+                except Exception as e:
+                    st.error(f"Erro ao analisar foto: {e}")
+
+    # ✍️ Sub-aba Texto
+    with sub_texto:
+        texto_refeicao = st.text_area("Descreva o que você comeu", placeholder="Ex: 1 bife de frango grelhado do tamanho da palma da mão")
+        if st.button("🧮 Calcular Calorias por Texto") and texto_refeicao and api_key:
             try:
                 client = genai.Client(api_key=api_key)
-                prompt = (
-                    "Analise esta foto de comida. Estime o nome resumido da refeição e a quantidade "
-                    "total de calorias. Responda ESTRITAMENTE em formato JSON com duas chaves: "
-                    "'alimento' (string) e 'calorias' (integer)."
-                )
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=[image, prompt]
-                )
-                
+                prompt = f"O usuário comeu: '{texto_refeicao}'. Estime o nome resumido e as calorias. Responda ESTRITAMENTE em JSON: {{\"alimento\": \"string\", \"calorias\": integer}}"
+                response = client.models.generate_content(model='gemini-3.6-flash', contents=[prompt])
                 texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
-                dados = json.loads(texto_limpo)
-                st.session_state.temp_comida = dados
-                st.success("Análise concluída! Verifique abaixo antes de salvar.")
+                st.session_state.temp_comida = json.loads(texto_limpo)
+                st.success("Calculado! Confirme abaixo.")
             except Exception as e:
-                st.error(f"Erro ao analisar foto: {e}")
+                st.error(f"Erro ao estimar: {e}")
 
+    # 🎙️ Sub-aba Áudio
+    with sub_audio:
+        audio_comida = st.audio_input("🎙️ Fale o que você comeu")
+        if st.button("🎙️ Analisar Áudio da Comida") and audio_comida and api_key:
+            try:
+                client = genai.Client(api_key=api_key)
+                audio_bytes = audio_comida.read()
+                prompt = "Ouça o áudio onde o usuário descreve a refeição. Estime o nome do alimento e o total de calorias. Responda ESTRITAMENTE em JSON: {\"alimento\": \"string\", \"calorias\": integer}"
+                contents = [prompt, types.Part.from_bytes(data=audio_bytes, mime_type=audio_comida.type)]
+                response = client.models.generate_content(model='gemini-3.6-flash', contents=contents)
+                texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
+                st.session_state.temp_comida = json.loads(texto_limpo)
+                st.success("Áudio processado! Confirme abaixo.")
+            except Exception as e:
+                st.error(f"Erro ao processar áudio: {e}")
+
+    # Form de Confirmação Unificado
     if st.session_state.temp_comida:
-        st.markdown("### ✏️ Confirmação do Registro")
-        with st.form("form_confirmar_foto"):
-            nome_editado = st.text_input("Descrição da Comida", value=st.session_state.temp_comida.get("alimento", ""))
-            calorias_editadas = st.number_input("Calorias Estimadas (kcal)", value=int(st.session_state.temp_comida.get("calorias", 0)), step=10)
-            
-            if st.form_submit_button("✅ Confirmar e Adicionar"):
+        st.markdown("---")
+        st.markdown("### ✏️ Confirmar / Retificar Refeição")
+        with st.form("form_confirmar_comida"):
+            nome_editado = st.text_input("Descrição", value=st.session_state.temp_comida.get("alimento", ""))
+            calorias_editadas = st.number_input("Calorias (kcal)", value=int(st.session_state.temp_comida.get("calorias", 0)), step=10)
+            if st.form_submit_button("✅ Adicionar à Fila do Dia"):
                 st.session_state.historico_comida.append({
-                    "data": hoje_str,
+                    "data": hoje_str_br,
                     "alimento": nome_editado,
                     "calorias": calorias_editadas
                 })
                 st.session_state.temp_comida = None
-                st.success("Refeição adicionada à fila do dia!")
+                st.success("Adicionado com sucesso!")
                 st.rerun()
 
 # ---------------------------------------------------------
-# ABA 2: COMIDA POR TEXTO
-# ---------------------------------------------------------
-with tab_texto_comida:
-    st.write("Descreva o que você comeu em linguagem natural.")
-    texto_refeicao = st.text_area("O que você comeu?", placeholder="Ex: 1 bife de frango grelhado do tamanho da palma da mão")
-    
-    if st.button("🧮 Calcular Calorias por Texto") and texto_refeicao and api_key:
-        try:
-            client = genai.Client(api_key=api_key)
-            prompt = (
-                f"O usuário descreveu a seguinte refeição: '{texto_refeicao}'. "
-                "Estime o nome formatado e a quantidade total de calorias (kcal). "
-                "Responda ESTRITAMENTE em formato JSON com as chaves 'alimento' (string) e 'calorias' (integer)."
-            )
-            response = client.models.generate_content(
-                model='gemini-3.6-flash',
-                contents=[prompt]
-            )
-            
-            texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
-            dados = json.loads(texto_limpo)
-            st.session_state.temp_comida = dados
-            st.success("Estimativa calculada! Confirme abaixo.")
-        except Exception as e:
-            st.error(f"Erro ao estimar refeição: {e}")
-
-# ---------------------------------------------------------
-# ABA 3: EXERCÍCIO
+# ABA 2: EXERCÍCIOS & PASSOS
 # ---------------------------------------------------------
 with tab_atividade:
-    st.write("Grave um áudio ou descreva seu treino.")
+    st.subheader("🏃‍♂️ Contador de Passos")
+    col_p1, col_p2 = st.columns([2, 1])
+    passos = col_p1.number_input("Número de Passos do Dia", value=0, step=500)
+    calorias_passos = int(passos * 0.04 * (peso / 70.0))
+    col_p2.metric("Gasto Estimado", f"{calorias_passos} kcal")
     
-    audio_input = st.audio_input("🎙️ Gravador de Áudio")
-    texto_treino = st.text_input("✍️ Ou digite seu treino aqui", placeholder="Ex: 40 minutos de corrida na esteira")
+    if col_p2.button("➕ Adicionar Passos"):
+        if calorias_passos > 0:
+            st.session_state.historico_treino.append({
+                "data": hoje_str_br,
+                "atividade": f"Caminhada / Passos ({passos} passos)",
+                "calorias": calorias_passos
+            })
+            st.success("Passos adicionados à fila do dia!")
+            st.rerun()
+            
+    st.markdown("---")
+    st.subheader("🏋️‍♂️ Exercícios (Áudio ou Texto)")
+    audio_input = st.audio_input("🎙️ Gravador de Áudio do Treino")
+    texto_treino = st.text_input("✍️ Ou digite seu treino aqui", placeholder="Ex: 30 minutos de bicicleta ergométrica")
     
     if st.button("🔥 Calcular Gasto do Treino") and api_key:
         try:
             client = genai.Client(api_key=api_key)
-            prompt = (
-                f"O usuário tem {peso}kg. Analise a atividade física informada e estime o gasto energético em kcal. "
-                "Responda ESTRITAMENTE em formato JSON com as chaves 'atividade' (string) e 'calorias' (integer)."
-            )
-            
+            prompt = f"O usuário tem {peso}kg. Analise a atividade e estime o gasto energético em kcal. Responda ESTRITAMENTE em JSON: {{\"atividade\": \"string\", \"calorias\": integer}}"
             contents = [prompt]
             if audio_input:
-                audio_bytes = audio_input.read()
-                contents.append(types.Part.from_bytes(data=audio_bytes, mime_type=audio_input.type))
+                contents.append(types.Part.from_bytes(data=audio_input.read(), mime_type=audio_input.type))
             elif texto_treino:
                 contents.append(f"Texto do treino: {texto_treino}")
             
-            response = client.models.generate_content(
-                model='gemini-3.6-flash',
-                contents=contents
-            )
-            
+            response = client.models.generate_content(model='gemini-3.6-flash', contents=contents)
             texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
-            dados = json.loads(texto_limpo)
-            st.session_state.temp_treino = dados
+            st.session_state.temp_treino = json.loads(texto_limpo)
             st.success("Gasto estimado com sucesso!")
         except Exception as e:
-            st.error(f"Erro ao analisar atividade: {e}")
+            st.error(f"Erro ao analisar treino: {e}")
             
     if st.session_state.temp_treino:
         st.markdown("### ✏️ Confirmação do Treino")
         with st.form("form_confirmar_treino"):
             treino_editado = st.text_input("Atividade", value=st.session_state.temp_treino.get("atividade", ""))
             kcal_editada = st.number_input("Calorias Queimadas (kcal)", value=int(st.session_state.temp_treino.get("calorias", 0)), step=10)
-            
-            if st.form_submit_button("✅ Confirmar e Adicionar"):
+            if st.form_submit_button("✅ Adicionar à Fila do Dia"):
                 st.session_state.historico_treino.append({
-                    "data": hoje_str,
+                    "data": hoje_str_br,
                     "atividade": treino_editado,
                     "calorias": kcal_editada
                 })
                 st.session_state.temp_treino = None
-                st.success("Treino adicionado à fila do dia!")
+                st.success("Treino adicionado!")
                 st.rerun()
 
 # ---------------------------------------------------------
-# ABA 4: CONSULTA E GRÁFICOS DO HISTÓRICO DA PLANILHA
+# ABA 3: HISTÓRICO E EXCLUSÃO DE REGISTROS SALVOS
 # ---------------------------------------------------------
 with tab_consulta:
-    st.subheader("📈 Consulta de Registros na Planilha")
+    st.subheader("📈 Registros Salvos na Planilha")
     
-    if st.button("🔄 Atualizar Dados da Planilha"):
+    if st.button("🔄 Atualizar Tabela"):
         st.rerun()
         
     if dados_planilha:
         df_planilha = pd.DataFrame(dados_planilha)
-        st.markdown("### 📋 Todos os Registros Salvos")
-        st.dataframe(df_planilha, use_container_width=True)
+        df_exibir = df_planilha[["Data", "Tipo", "Descricao", "Calorias_Kcal"]]
+        df_exibir.columns = ["Data", "Tipo", "Descrição / Item", "Calorias (kcal)"]
+        st.dataframe(df_exibir, use_container_width=True)
         
         st.markdown("---")
-        st.markdown("### 📊 Evolução por Data (kcal)")
-        df_resumo = df_planilha.groupby(["Data", "Tipo"])["Calorias_Kcal"].sum().unstack().fillna(0)
-        st.bar_chart(df_resumo)
+        st.subheader("🗑️ Apagar Registro Salvo")
+        
+        opcoes_deletar = {
+            f"Linha {item['Linha']}: [{item['Data']}] {item['Tipo']} - {item['Descricao']} ({item['Calorias_Kcal']} kcal)": item['Linha']
+            for item in dados_planilha
+        }
+        
+        item_selecionado = st.selectbox("Selecione o item para apagar permanentemente:", list(opcoes_deletar.keys()))
+        
+        if st.button("❌ Apagar Registro Selecionado"):
+            linha_para_apagar = opcoes_deletar[item_selecionado]
+            try:
+                res = requests.post(url_sheets, json={"action": "delete", "rowIndex": linha_para_apagar})
+                if res.status_code == 200:
+                    st.success("Registro apagado com sucesso da Planilha!")
+                    st.rerun()
+                else:
+                    st.error("Erro ao apagar registro.")
+            except Exception as e:
+                st.error(f"Erro de conexão: {e}")
     else:
-        st.info("Nenhum registro encontrado na planilha até o momento.")
+        st.info("Nenhum registro encontrado na planilha.")
 
 # ---------------------------------------------------------
-# RESUMO DOS NOVOS REGISTROS DA SESSÃO ATUAL
+# RESUMO DA SESSÃO ATUAL (REGISTROS PENDENTES)
 # ---------------------------------------------------------
 st.markdown("---")
+st.subheader("📋 Registros de Hoje Pendentes para Salvar")
 col_t1, col_t2 = st.columns(2)
 
 with col_t1:
-    st.subheader("📋 Novos Comidas (A Salvar)")
+    st.markdown("**Alimentação**")
     if st.session_state.historico_comida:
-        st.dataframe(pd.DataFrame(st.session_state.historico_comida), use_container_width=True)
+        for idx, item in enumerate(st.session_state.historico_comida):
+            col_a, col_b = st.columns([3, 1])
+            col_a.write(f"• {item['alimento']} ({item['calorias']} kcal)")
+            if col_b.button("🗑️", key=f"del_c_{idx}"):
+                st.session_state.historico_comida.pop(idx)
+                st.rerun()
 
 with col_t2:
-    st.subheader("🏋️‍♂️ Novos Treinos (A Salvar)")
+    st.markdown("**Treinos / Passos**")
     if st.session_state.historico_treino:
-        st.dataframe(pd.DataFrame(st.session_state.historico_treino), use_container_width=True)
+        for idx, item in enumerate(st.session_state.historico_treino):
+            col_a, col_b = st.columns([3, 1])
+            col_a.write(f"• {item['atividade']} ({item['calorias']} kcal)")
+            if col_b.button("🗑️", key=f"del_t_{idx}"):
+                st.session_state.historico_treino.pop(idx)
+                st.rerun()
 
-if st.button("💾 Enviar Registro Novo do Dia para o Google Sheets"):
+if st.button("💾 Enviar Fila do Dia para o Google Sheets"):
     if not url_sheets:
-        st.error("Configure a variável 'URL_SHEETS' nos Secrets.")
+        st.error("Configure 'URL_SHEETS' nos Secrets.")
     else:
         try:
             dados_salvar = []
-            
             for c in st.session_state.historico_comida:
-                dados_salvar.append({
-                    "Data": hoje_str, 
-                    "Tipo": "Alimentação", 
-                    "Descricao": c["alimento"], 
-                    "Calorias_Kcal": c["calorias"]
-                })
+                dados_salvar.append({"Data": hoje_str_br, "Tipo": "Alimentação", "Descricao": c["alimento"], "Calorias_Kcal": c["calorias"]})
             for t in st.session_state.historico_treino:
-                dados_salvar.append({
-                    "Data": hoje_str, 
-                    "Tipo": "Treino", 
-                    "Descricao": t["atividade"], 
-                    "Calorias_Kcal": t["calorias"]
-                })
+                dados_salvar.append({"Data": hoje_str_br, "Tipo": "Treino", "Descricao": t["atividade"], "Calorias_Kcal": t["calorias"]})
                 
             if dados_salvar:
-                response = requests.post(url_sheets, json=dados_salvar)
+                response = requests.post(url_sheets, json={"action": "add", "data": dados_salvar})
                 if response.status_code == 200:
                     st.balloons()
-                    st.success("Novos registros salvos com sucesso na Planilha!")
+                    st.success("Salvo com sucesso na Planilha!")
                     st.session_state.historico_comida = []
                     st.session_state.historico_treino = []
                     st.rerun()
-                else:
-                    st.error(f"Erro ao enviar: Status {response.status_code}")
             else:
-                st.warning("Nenhum registro novo pendente para salvar.")
+                st.warning("Nenhum registro pendente.")
         except Exception as e:
-            st.error(f"Erro de conexão: {e}")
-
-if st.button("🔄 Limpar Registros Não Salvos"):
-    st.session_state.historico_comida = []
-    st.session_state.historico_treino = []
-    st.session_state.temp_comida = None
-    st.session_state.temp_treino = None
-    st.rerun()
+            st.error(f"Erro: {e}")
