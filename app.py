@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import requests
-from datetime import date
+from datetime import date, datetime
 from google import genai
 from google.genai import types
 from PIL import Image
@@ -14,10 +14,20 @@ st.set_page_config(page_title="Diário Calórico Pro", page_icon="⚡", layout="
 api_key = st.secrets.get("GEMINI_API_KEY", None)
 url_sheets = st.secrets.get("URL_SHEETS", None)
 
-hoje_data = date.today()
-hoje_str_br = hoje_data.strftime("%d/%m/%y")
+# --- FUNÇÃO ROBUSTA DE NORMALIZAÇÃO DE DATA ---
+def normalizar_data(val):
+    if not val:
+        return None
+    val_str = str(val).strip().split("T")[0]  # Remove horário se for formato ISO
+    formatos = ["%d/%m/%y", "%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"]
+    for fmt in formatos:
+        try:
+            return datetime.strptime(val_str, fmt).date()
+        except ValueError:
+            pass
+    return None
 
-# --- FUNÇÃO PARA BUSCAR DADOS (PERFIL + HISTÓRICO) DA PLANILHA ---
+# --- FUNÇÃO PARA BUSCAR DADOS DA PLANILHA ---
 def buscar_dados_planilha():
     if not url_sheets:
         return {"perfil": {}, "historico": []}
@@ -44,13 +54,23 @@ if "temp_comida" not in st.session_state:
 if "temp_treino" not in st.session_state:
     st.session_state.temp_treino = None
 
+# CORPO PRINCIPAL
+st.title("⚡ Diário Calórico & Fitness")
+
+# --- SELETOR DE DATA DEDICADO ---
+col_dt1, col_dt2 = st.columns([2, 1])
+data_selecionada = col_dt1.date_input("📅 Selecione a Data para Visualizar / Registrar", value=date.today())
+data_sel_br = data_selecionada.strftime("%d/%m/%y")
+
+if col_dt2.button("🔄 Recarregar Dados"):
+    st.rerun()
+
 # --- SIDEBAR: PERFIL & PARÂMETROS ---
 st.sidebar.header("📊 Perfil & Parâmetros")
 
 if not api_key:
     api_key = st.sidebar.text_input("Chave da API Google Gemini", type="password")
 
-# Valores padrão oriundos da planilha
 sexo_def = perfil_remoto.get("Sexo", "Masculino")
 idx_sexo = 0 if sexo_def == "Masculino" else 1
 
@@ -93,36 +113,34 @@ if st.sidebar.button("💾 Salvar Parâmetros na Planilha"):
         except Exception as e:
             st.sidebar.error(f"Erro: {e}")
 
-# --- CÁLCULO DE CALORIAS SALVAS HOJE NA PLANILHA ---
-kcal_comida_planilha_hoje = sum(
+# --- CÁLCULO DE CALORIAS FILTRADAS PELA DATA SELECIONADA ---
+kcal_comida_planilha_dia = sum(
     int(item.get("Calorias_Kcal", 0)) 
     for item in dados_planilha 
-    if item.get("Data") == hoje_str_br and item.get("Tipo") in ["Alimentação", "Alimentacao"]
+    if normalizar_data(item.get("Data")) == data_selecionada and item.get("Tipo") in ["Alimentação", "Alimentacao"]
 )
 
-kcal_treino_planilha_hoje = sum(
+kcal_treino_planilha_dia = sum(
     int(item.get("Calorias_Kcal", 0)) 
     for item in dados_planilha 
-    if item.get("Data") == hoje_str_br and item.get("Tipo") in ["Treino", "Passos"]
+    if normalizar_data(item.get("Data")) == data_selecionada and item.get("Tipo") in ["Treino", "Passos"]
 )
 
-consumido_sessao = sum(item["calorias"] for item in st.session_state.historico_comida)
-gasto_treinos_sessao = sum(item["calorias"] for item in st.session_state.historico_treino)
+consumido_sessao = sum(item["calorias"] for item in st.session_state.historico_comida if item["data_obj"] == data_selecionada)
+gasto_treinos_sessao = sum(item["calorias"] for item in st.session_state.historico_treino if item["data_obj"] == data_selecionada)
 
-consumido_total = kcal_comida_planilha_hoje + consumido_sessao
-gasto_exercicio_total = kcal_treino_planilha_hoje + gasto_treinos_sessao
+consumido_total = kcal_comida_planilha_dia + consumido_sessao
+gasto_exercicio_total = kcal_treino_planilha_dia + gasto_treinos_sessao
 
 meta_ajustada = meta_base + gasto_exercicio_total
 saldo_restante = meta_ajustada - consumido_total
 
-# CORPO PRINCIPAL
-st.title("⚡ Diário Calórico & Fitness")
-
-# Painel de Indicadores do Dia
+# PAINEL DE INDICADORES DO DIA SELECIONADO
+st.caption(f"Exibindo dados para o dia: **{data_sel_br}**")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Meta Base", f"{meta_base} kcal")
 col2.metric("Gasto Atividades", f"+{gasto_exercicio_total} kcal")
-col3.metric("Consumido Hoje", f"{consumido_total} kcal")
+col3.metric("Consumido", f"{consumido_total} kcal")
 col4.metric("Falta Consumir", f"{saldo_restante} kcal", delta_color="inverse")
 
 # --- BARRA DE PROGRESSO COM CORES DINÂMICAS ---
@@ -163,7 +181,7 @@ tab_comida, tab_atividade, tab_consulta = st.tabs([
 with tab_comida:
     sub_foto, sub_texto, sub_audio = st.tabs(["📸 Foto", "✍️ Texto", "🎙️ Áudio"])
     
-    # 📸 Sub-aba Foto com Campo de Observação
+    # 📸 Sub-aba Foto
     with sub_foto:
         foto = st.file_uploader("Tire uma foto do prato", type=["jpg", "jpeg", "png"], key="upload_foto")
         obs_foto = st.text_input("Observação / Detalhes para a IA (opcional)", placeholder="Ex: Bananada sem açúcar, frango na air fryer sem óleo")
@@ -225,12 +243,13 @@ with tab_comida:
             calorias_editadas = st.number_input("Calorias (kcal)", value=int(st.session_state.temp_comida.get("calorias", 0)), step=10)
             if st.form_submit_button("✅ Adicionar à Fila do Dia"):
                 st.session_state.historico_comida.append({
-                    "data": hoje_str_br,
+                    "data_str": data_sel_br,
+                    "data_obj": data_selecionada,
                     "alimento": nome_editado,
                     "calorias": calorias_editadas
                 })
                 st.session_state.temp_comida = None
-                st.success("Adicionado com sucesso!")
+                st.success(f"Adicionado para o dia {data_sel_br}!")
                 st.rerun()
 
 # ---------------------------------------------------------
@@ -246,11 +265,12 @@ with tab_atividade:
     if col_p2.button("➕ Adicionar Passos"):
         if calorias_passos > 0:
             st.session_state.historico_treino.append({
-                "data": hoje_str_br,
+                "data_str": data_sel_br,
+                "data_obj": data_selecionada,
                 "atividade": f"Caminhada / Passos ({passos} passos)",
                 "calorias": calorias_passos
             })
-            st.success("Passos adicionados à fila do dia!")
+            st.success("Passos adicionados à fila!")
             st.rerun()
             
     st.markdown("---")
@@ -282,12 +302,13 @@ with tab_atividade:
             kcal_editada = st.number_input("Calorias Queimadas (kcal)", value=int(st.session_state.temp_treino.get("calorias", 0)), step=10)
             if st.form_submit_button("✅ Adicionar à Fila do Dia"):
                 st.session_state.historico_treino.append({
-                    "data": hoje_str_br,
+                    "data_str": data_sel_br,
+                    "data_obj": data_selecionada,
                     "atividade": treino_editado,
                     "calorias": kcal_editada
                 })
                 st.session_state.temp_treino = None
-                st.success("Treino adicionado!")
+                st.success(f"Treino adicionado para {data_sel_br}!")
                 st.rerun()
 
 # ---------------------------------------------------------
@@ -296,9 +317,6 @@ with tab_atividade:
 with tab_consulta:
     st.subheader("📈 Registros Salvos na Planilha")
     
-    if st.button("🔄 Atualizar Tabela"):
-        st.rerun()
-        
     if dados_planilha:
         df_planilha = pd.DataFrame(dados_planilha)
         df_exibir = df_planilha[["Data", "Tipo", "Descricao", "Calorias_Kcal"]]
@@ -333,7 +351,7 @@ with tab_consulta:
 # RESUMO DA SESSÃO ATUAL (REGISTROS PENDENTES)
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("📋 Registros de Hoje Pendentes para Salvar")
+st.subheader(f"📋 Registros Pendentes a Salvar ({data_sel_br})")
 col_t1, col_t2 = st.columns(2)
 
 with col_t1:
@@ -341,7 +359,7 @@ with col_t1:
     if st.session_state.historico_comida:
         for idx, item in enumerate(st.session_state.historico_comida):
             col_a, col_b = st.columns([3, 1])
-            col_a.write(f"• {item['alimento']} ({item['calorias']} kcal)")
+            col_a.write(f"• [{item['data_str']}] {item['alimento']} ({item['calorias']} kcal)")
             if col_b.button("🗑️", key=f"del_c_{idx}"):
                 st.session_state.historico_comida.pop(idx)
                 st.rerun()
@@ -351,21 +369,21 @@ with col_t2:
     if st.session_state.historico_treino:
         for idx, item in enumerate(st.session_state.historico_treino):
             col_a, col_b = st.columns([3, 1])
-            col_a.write(f"• {item['atividade']} ({item['calorias']} kcal)")
+            col_a.write(f"• [{item['data_str']}] {item['atividade']} ({item['calorias']} kcal)")
             if col_b.button("🗑️", key=f"del_t_{idx}"):
                 st.session_state.historico_treino.pop(idx)
                 st.rerun()
 
-if st.button("💾 Enviar Fila do Dia para o Google Sheets"):
+if st.button(f"💾 Enviar Fila ({data_sel_br}) para o Google Sheets"):
     if not url_sheets:
         st.error("Configure 'URL_SHEETS' nos Secrets.")
     else:
         try:
             dados_salvar = []
             for c in st.session_state.historico_comida:
-                dados_salvar.append({"Data": hoje_str_br, "Tipo": "Alimentação", "Descricao": c["alimento"], "Calorias_Kcal": c["calorias"]})
+                dados_salvar.append({"Data": c["data_str"], "Tipo": "Alimentação", "Descricao": c["alimento"], "Calorias_Kcal": c["calorias"]})
             for t in st.session_state.historico_treino:
-                dados_salvar.append({"Data": hoje_str_br, "Tipo": "Treino", "Descricao": t["atividade"], "Calorias_Kcal": t["calorias"]})
+                dados_salvar.append({"Data": t["data_str"], "Tipo": "Treino", "Descricao": t["atividade"], "Calorias_Kcal": t["calorias"]})
                 
             if dados_salvar:
                 response = requests.post(url_sheets, json={"action": "add", "data": dados_salvar})
